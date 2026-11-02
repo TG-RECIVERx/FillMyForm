@@ -1,16 +1,14 @@
 """
 Coded by @syedmahinislam
-High-Performance Asynchronous Google Form Bulk Submitter Bot (Auto Dynamic Parser)
+High-Performance Asynchronous Google Form Bulk Submitter Bot
 """
 
 import asyncio
 import logging
 import random
 import os
-import re
 import aiohttp
 from aiohttp import web
-from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -18,7 +16,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 
 # Coded by @syedmahinislam
-TOKEN = "9270668766:AAFWBC93VvWyYBKBBnksbxsLQU4XQMEDYGc"
+TOKEN = "9270668766:AAGXcC5PMLexQc5QuLWKUkZaM-nODWWEUaw"
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -44,7 +42,7 @@ async def cmd_start(message: Message, state: FSMContext):
 async def cmd_t(message: Message, state: FSMContext):
     await state.set_state(FormStates.waiting_for_link)
     await message.answer(
-        "🔗 Please send your Google Form link (e.g., `forms.gle` or `viewform` link):\n\n"
+        "🔗 Please send your Google Form <b>'forms.gle'</b> or <b>'viewform'</b> link:\n\n"
         "<i>Coded by @syedmahinislam</i>",
         parse_mode="HTML"
     )
@@ -54,27 +52,24 @@ async def cmd_t(message: Message, state: FSMContext):
 async def process_link(message: Message, state: FSMContext):
     link = message.text.strip()
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-
-    # Resolve forms.gle short links
+    # Handle short links or viewform conversion
     if "forms.gle" in link:
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(link, headers=headers, allow_redirects=True, timeout=10) as resp:
+                async with session.get(link, allow_redirects=True, timeout=10) as resp:
                     link = str(resp.url)
         except Exception:
             pass
 
-    if "viewform" not in link:
-        link = link.split("?")[0] + "/viewform"
+    if "viewform" in link:
+        link = link.replace("viewform", "formResponse")
+    elif "formResponse" not in link:
+        link = link.split("?")[0] + "/formResponse"
 
     await state.update_data(form_link=link)
     await state.set_state(FormStates.waiting_for_count)
     await message.answer(
-        f"✅ Link resolved successfully!\n`{link}`\n\n"
+        f"✅ Link received and configured successfully!\n`{link}`\n\n"
         "🔢 Now, enter the total number of responses you want to generate (e.g., 1000, 2000):\n\n"
         "<i>Coded by @syedmahinislam</i>",
         parse_mode="HTML"
@@ -98,7 +93,7 @@ async def process_count(message: Message, state: FSMContext):
     status_msg = await message.answer(
         f"🚀 Initializing high-speed bulk submission...\n"
         f"• Target: <b>{count}</b> responses\n"
-        f"• Status: Automatically analyzing form fields...\n\n"
+        f"• Status: Starting direct payload delivery...\n\n"
         f"<i>Coded by @syedmahinislam</i>",
         parse_mode="HTML"
     )
@@ -107,54 +102,23 @@ async def process_count(message: Message, state: FSMContext):
     asyncio.create_task(run_bulk_submitter(chat_id, status_msg.message_id, form_link, count))
 
 
-async def run_bulk_submitter(chat_id: int, msg_id: int, form_link: str, total: int):
-    post_url = form_link.replace("viewform", "formResponse")
+async def run_bulk_submitter(chat_id: int, msg_id: int, post_url: str, total: int):
+    # Apnar form er field entry IDs ebong possible options gulo ekhane define kora holo
+    form_data_mapping = {
+        "entry.1291578592": ["Bashay", "Tor nanir heday"],
+        "entry.394595566": ["10-20", "20-30", "30-40", "40+"],
+        "entry.1848189587": ["Madarchod", "Bainchod", "Khankir pola"]
+    }
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
         "Content-Type": "application/x-www-form-urlencoded"
     }
 
     async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(form_link, headers=headers, timeout=15) as resp:
-                if resp.status != 200:
-                    await bot.edit_message_text(
-                        "❌ Failed to load Google Form. Please check if the link is public.",
-                        chat_id=chat_id, message_id=msg_id
-                    )
-                    return
-                html = await resp.text()
-        except Exception as e:
-            await bot.edit_message_text(f"❌ Error connecting to form: {str(e)}", chat_id=chat_id, message_id=msg_id)
-            return
-
-        # Dynamic Extraction of Entry IDs and options from form HTML
-        soup = BeautifulSoup(html, "html.parser")
-        form_data_mapping = {}
-
-        # Find all inputs or radio options with entry names
-        for tag in soup.find_all(attrs={"name": True}):
-            name = tag["name"]
-            if name.startswith("entry."):
-                if name not in form_data_mapping:
-                    form_data_mapping[name] = []
-                val = tag.get("data-value") or tag.get("value")
-                if val and val not in form_data_mapping[name] and val != "__other_option__":
-                    form_data_mapping[name].append(val)
-
-        # Fallback if no options extracted via data-value
-        for entry in form_data_mapping:
-            if not form_data_mapping[entry]:
-                form_data_mapping[entry] = ["Yes", "No", "Test Value", "A", "B", "1"]
-
-        if not form_data_mapping:
-            await bot.edit_message_text("❌ No entry fields found automatically. Please check the link.", chat_id=chat_id, message_id=msg_id)
-            return
-
         success = 0
         failed = 0
-        chunk_size = 50  # High-speed batch processing
+        chunk_size = 50  # Concurrent batch size for blazing fast speed
 
         for i in range(0, total, chunk_size):
             current_batch = min(chunk_size, total - (success + failed))
