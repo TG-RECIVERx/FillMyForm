@@ -17,7 +17,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 
 # Coded by @syedmahinislam
-TOKEN = "9270668766:AAFeK2cNW3fSL-oOcc0cP_QIKsCfnEdHsVA"
+TOKEN = "9270668766:AAErnEoi0h-26C3eaei1QRnaqMHJpmD1Sow"
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
