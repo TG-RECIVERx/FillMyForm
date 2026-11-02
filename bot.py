@@ -1,12 +1,14 @@
 """
 Coded by @syedmahinislam
-High-Performance Asynchronous Google Form Bulk Submitter Bot
+High-Performance Asynchronous Google Form Bulk Submitter Bot with Dummy Web Server
 """
 
 import asyncio
 import logging
 import random
+import os
 import aiohttp
+from aiohttp import web
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -15,7 +17,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 
 # Coded by @syedmahinislam
-TOKEN = "9270668766:AAF3d_DtG_LZHTO-rgJYKnWZHUcFXjqKFqQ"
+TOKEN = "9270668766:AAFeK2cNW3fSL-oOcc0cP_QIKsCfnEdHsVA"
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -87,7 +89,6 @@ async def process_count(message: Message, state: FSMContext):
     )
     await state.clear()
 
-    # Background task for live progress updates
     asyncio.create_task(run_bulk_submitter(chat_id, status_msg.message_id, form_link, count))
 
 
@@ -120,7 +121,7 @@ async def run_bulk_submitter(chat_id: int, msg_id: int, form_link: str, total: i
 
         success = 0
         failed = 0
-        chunk_size = 50  # Concurrent requests chunk size for high speed
+        chunk_size = 50
 
         for i in range(0, total, chunk_size):
             current_batch = min(chunk_size, total - (success + failed))
@@ -141,7 +142,6 @@ async def run_bulk_submitter(chat_id: int, msg_id: int, form_link: str, total: i
             percent = (completed / total) * 100
             remaining = total - completed
 
-            # Live update every batch
             try:
                 await bot.edit_message_text(
                     f"🚀 <b>Bulk Submission in Progress...</b>\n\n"
@@ -157,12 +157,11 @@ async def run_bulk_submitter(chat_id: int, msg_id: int, form_link: str, total: i
             except Exception:
                 pass
 
-        # Final Success Message
         await bot.edit_message_text(
             f"📊 <b>Bulk Submission Complete!</b>\n\n"
             f"• Target: <b>{total}</b>\n"
             f"• Successful: <b>{success}</b>\n"
-            f"• Failed: <b>{failed}</b>\n"
+            f"• Failed: {failed}\n"
             f"• Progress: <b>100%</b> ✅\n\n"
             f"<i>Coded by @syedmahinislam</i>",
             chat_id=chat_id,
@@ -179,8 +178,27 @@ async def send_request(session, url, payload, headers):
         return False
 
 
+# --- Dummy Web Server for Render Port Binding ---
+async def handle_ping(request):
+    return web.Response(text="Bot is running successfully! Coded by @syedmahinislam")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    # Render assigns port dynamically via PORT environment variable
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Dummy web server running on port {port}...")
+
+
 async def main():
-    print("Bot started successfully... Coded by @syedmahinislam")
+    print("Bot starting... Coded by @syedmahinislam")
+    # Start dummy web server and bot polling concurrently
+    await start_web_server()
     await dp.start_polling(bot)
 
 
