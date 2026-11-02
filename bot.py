@@ -1,201 +1,159 @@
-"""
-Coded by @syedmahinislam
-High-Performance Asynchronous Google Form Bulk Submitter Bot
-"""
-
 import asyncio
 import logging
 import random
-import os
-import aiohttp
-from aiohttp import web
+import re
+import requests
+from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message
+from aiogram.types import BotCommand, Message
 
-# Coded by @syedmahinislam
-TOKEN = "9270668766:AAGXcC5PMLexQc5QuLWKUkZaM-nODWWEUaw"
+TOKEN = "9270668766:AAHgNc6riF9UAoDHNePF9IaWTe3pb9wmvPM"
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 
-class FormStates(StatesGroup):
-    waiting_for_link = State()
-    waiting_for_count = State()
+class FormAutomationStates(StatesGroup):
+  waiting_for_link = State()
+  waiting_for_count = State()
 
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer(
-        "👋 Welcome to Fast Form Submitter Bot!\n\n"
-        "Send `/t` command to start form automation.\n\n"
-        "<i>Coded by @syedmahinislam</i>",
-        parse_mode="HTML"
-    )
+  await state.clear()
+  await message.answer(
+      "As-salamu alaikum! Smart Form Submitter Bot ready ache. `/t` command"
+      " diye shuru korun."
+  )
 
 
 @dp.message(Command("t"))
 async def cmd_t(message: Message, state: FSMContext):
-    await state.set_state(FormStates.waiting_for_link)
-    await message.answer(
-        "🔗 Please send your Google Form <b>'forms.gle'</b> or <b>'viewform'</b> link:\n\n"
-        "<i>Coded by @syedmahinislam</i>",
-        parse_mode="HTML"
-    )
+  await state.set_state(FormAutomationStates.waiting_for_link)
+  await message.answer(
+      "🔗 Doya kore apnar Google Form er link-ti (jemon `.../viewform`) ekhane"
+      " din:"
+  )
 
 
-@dp.message(FormStates.waiting_for_link)
-async def process_link(message: Message, state: FSMContext):
-    link = message.text.strip()
+@dp.message(FormAutomationStates.waiting_for_link)
+async def process_form_link(message: Message, state: FSMContext):
+  form_link = message.text.strip()
+  
+  # Link sothik kina ba entry extract kora jacche kina check kora
+  if "viewform" not in form_link:
+    await message.answer("❌ Doya kore ekti valid Google Form 'viewform' link din:")
+    return
+
+  await state.update_data(form_link=form_link)
+  await state.set_state(FormAutomationStates.waiting_for_count)
+  await message.answer(
+      f"✅ Link sothikvabe pawa gese!\n\nEkhon apni eksathe total koyti"
+      " responses pathate chan? (Jemon: 500, 1000 ba 2000)"
+  )
+
+
+@dp.message(FormAutomationStates.waiting_for_count)
+async def process_response_count(message: Message, state: FSMContext):
+  try:
+    total_count = int(message.text.strip())
+  except ValueError:
+    await message.answer("❌ Doya kore ekti valid number din (jemon: 1000):")
+    return
+
+  data = await state.get_data()
+  form_link = data.get("form_link")
+  chat_id = message.chat.id
+
+  await message.answer(
+      f"🚀 Form analyze ebong bulk submission start hocche!\n• Target:"
+      f" `{total_count}` responses\n⏳ Kaj cholche, shesh hole notification"
+      " paben..."
+  )
+  await state.clear()
+
+  asyncio.create_task(extract_and_send_requests(chat_id, form_link, total_count))
+
+
+async def extract_and_send_requests(chat_id: int, form_link: str, total_count: int):
+  headers = {
+      "User-Agent": (
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,"
+          " like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      )
+  }
+
+  try:
+    # 1. Google Form page fetch kore entry IDs ber kora
+    response = requests.get(form_link, headers=headers, timeout=15)
+    if response.status_code != 200:
+      await bot.send_message(chat_id, "❌ Google Form-ti load kora jayni. Link check korun.")
+      return
+
+    soup = BeautifulSoup(response.text, "html.parser")
     
-    # Handle short links or viewform conversion
-    if "forms.gle" in link:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(link, allow_redirects=True, timeout=10) as resp:
-                    link = str(resp.url)
-        except Exception:
-            pass
+    # Form er post URL banano
+    post_url = form_link.replace("viewform", "formResponse")
 
-    if "viewform" in link:
-        link = link.replace("viewform", "formResponse")
-    elif "formResponse" not in link:
-        link = link.split("?")[0] + "/formResponse"
+    # Form er input fields / entries khuje ber kora
+    # Google form entries usually 'entry.XXXXXXXXX' namer hoy
+    entry_names = set()
+    for tag in soup.find_all(attrs={"name": True}):
+      name = tag["name"]
+      if name.startswith("entry."):
+        entry_names.add(name)
 
-    await state.update_data(form_link=link)
-    await state.set_state(FormStates.waiting_for_count)
-    await message.answer(
-        f"✅ Link received and configured successfully!\n`{link}`\n\n"
-        "🔢 Now, enter the total number of responses you want to generate (e.g., 1000, 2000):\n\n"
-        "<i>Coded by @syedmahinislam</i>",
-        parse_mode="HTML"
+    if not entry_names:
+      await bot.send_message(chat_id, "❌ Form er kono entry field pawa jayni. Link-ti public kina check korun.")
+      return
+
+    success_count = 0
+    failed_count = 0
+
+    # 2. Bulk Request Loop
+    for _ in range(total_count):
+      payload = {}
+      for entry in entry_names:
+        # Protibar random data ba test text generate kora
+        payload[entry] = random.choice(["Yes", "No", "Good", "Excellent", "1", "Test Response", "A", "B"])
+
+      try:
+        res = requests.post(post_url, data=payload, headers=headers, timeout=10)
+        if res.status_code in [200, 302]:
+          success_count += 1
+        else:
+          failed_count += 1
+      except Exception:
+        failed_count += 1
+
+      await asyncio.sleep(0.02)  # Fast ebong safe interval
+
+    # Final Notification
+    await bot.send_message(
+        chat_id,
+        f"📊 **Bulk Submission Complete!**\n\n"
+        f"• Total Target: {total_count}\n"
+        f"• Successful: {success_count}\n"
+        f"• Failed: {failed_count}\n\n"
+        f"✅ Sob kaj sesh bhai!",
     )
 
-
-@dp.message(FormStates.waiting_for_count)
-async def process_count(message: Message, state: FSMContext):
-    try:
-        count = int(message.text.strip())
-        if count <= 0:
-            raise ValueError()
-    except ValueError:
-        await message.answer("❌ Please enter a valid positive number (e.g., 1000):")
-        return
-
-    data = await state.get_data()
-    form_link = data.get("form_link")
-    chat_id = message.chat.id
-
-    status_msg = await message.answer(
-        f"🚀 Initializing high-speed bulk submission...\n"
-        f"• Target: <b>{count}</b> responses\n"
-        f"• Status: Starting direct payload delivery...\n\n"
-        f"<i>Coded by @syedmahinislam</i>",
-        parse_mode="HTML"
-    )
-    await state.clear()
-
-    asyncio.create_task(run_bulk_submitter(chat_id, status_msg.message_id, form_link, count))
-
-
-async def run_bulk_submitter(chat_id: int, msg_id: int, post_url: str, total: int):
-    # Apnar form er field entry IDs ebong possible options gulo ekhane define kora holo
-    form_data_mapping = {
-        "entry.1291578592": ["Bashay", "Tor nanir heday"],
-        "entry.394595566": ["10-20", "20-30", "30-40", "40+"],
-        "entry.1848189587": ["Madarchod", "Bainchod", "Khankir pola"]
-    }
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
-
-    async with aiohttp.ClientSession() as session:
-        success = 0
-        failed = 0
-        chunk_size = 50  # Concurrent batch size for blazing fast speed
-
-        for i in range(0, total, chunk_size):
-            current_batch = min(chunk_size, total - (success + failed))
-            tasks = []
-
-            for _ in range(current_batch):
-                payload = {entry: random.choice(options) for entry, options in form_data_mapping.items()}
-                tasks.append(send_request(session, post_url, payload, headers))
-
-            results = await asyncio.gather(*tasks)
-            for res in results:
-                if res:
-                    success += 1
-                else:
-                    failed += 1
-
-            completed = success + failed
-            percent = (completed / total) * 100
-            remaining = total - completed
-
-            try:
-                await bot.edit_message_text(
-                    f"🚀 <b>Bulk Submission in Progress...</b>\n\n"
-                    f"• Target: <b>{total}</b>\n"
-                    f"• Sent: <b>{completed} / {total}</b>\n"
-                    f"• Remaining: <b>{remaining}</b>\n"
-                    f"• Progress: <b>{percent:.1f}%</b> ⏳\n\n"
-                    f"<i>Coded by @syedmahinislam</i>",
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
-
-        await bot.edit_message_text(
-            f"📊 <b>Bulk Submission Complete!</b>\n\n"
-            f"• Target: <b>{total}</b>\n"
-            f"• Successful: <b>{success}</b>\n"
-            f"• Failed: <b>{failed}</b>\n"
-            f"• Progress: <b>100%</b> ✅\n\n"
-            f"<i>Coded by @syedmahinislam</i>",
-            chat_id=chat_id,
-            message_id=msg_id,
-            parse_mode="HTML"
-        )
-
-
-async def send_request(session, url, payload, headers):
-    try:
-        async with session.post(url, data=payload, headers=headers, timeout=10) as response:
-            return response.status in [200, 302]
-    except Exception:
-        return False
-
-
-# Dummy Web Server for Render Port Binding
-async def handle_ping(request):
-    return web.Response(text="Bot is running successfully! Coded by @syedmahinislam")
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_ping)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    
-    port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
+  except Exception as e:
+    await bot.send_message(chat_id, f"❌ Error: {str(e)}")
 
 
 async def main():
-    print("Bot starting... Coded by @syedmahinislam")
-    await start_web_server()
-    await dp.start_polling(bot)
+  await bot.set_my_commands([
+      BotCommand(command="start", description="Bot shuru korun"),
+      BotCommand(command="t", description="Form automation shuru korun"),
+  ])
+  print("Bot successfully running...")
+  await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(main())
+  logging.basicConfig(level=logging.INFO)
+  asyncio.run(main())
